@@ -121,10 +121,6 @@ sema_up (struct semaphore *sema)
     thread_unblock (target);
   }
 
-  // preemption on wake up
-  if (target != NULL && target->priority > thread_current()->priority) {
-    thread_yield();
-  } /*solut*/
 
   intr_set_level (old_level);
 }
@@ -434,4 +430,3 @@ comparator_greater_sema_priority(const struct list_elem* a, const struct list_el
   return x->semaphore.priority > y->semaphore.priority;
 }
 /*solut*/
-

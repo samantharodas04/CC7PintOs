@@ -25,11 +25,13 @@ typedef int tid_t;
 #define PRI_MAX 63                      /* Highest priority. */
 
 /* A kernel thread or user process.
+
    Each thread structure is stored in its own 4 kB page.  The
    thread structure itself sits at the very bottom of the page
    (at offset 0).  The rest of the page is reserved for the
    thread's kernel stack, which grows downward from the top of
    the page (at offset 4 kB).  Here's an illustration:
+
         4 kB +---------------------------------+
              |          kernel stack           |
              |                |                |
@@ -51,18 +53,22 @@ typedef int tid_t;
              |               name              |
              |              status             |
         0 kB +---------------------------------+
+
    The upshot of this is twofold:
+
       1. First, `struct thread' must not be allowed to grow too
          big.  If it does, then there will not be enough room for
          the kernel stack.  Our base `struct thread' is only a
          few bytes in size.  It probably should stay well under 1
          kB.
+
       2. Second, kernel stacks must not be allowed to grow too
          large.  If a stack overflows, it will corrupt the thread
          state.  Thus, kernel functions should not allocate large
          structures or arrays as non-static local variables.  Use
          dynamic allocation with malloc() or palloc_get_page()
          instead.
+
    The first symptom of either of these problems will probably be
    an assertion failure in thread_current(), which checks that
    the `magic' member of the running thread's `struct thread' is
@@ -82,20 +88,30 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    int original_priority; /* Priority, before donation */
+    int original_priority;              /* Priority, before donation */
     struct list_elem allelem;           /* List element for all threads list. */
-    struct list_elem waitelem; /* List element, stored in the wait_list queue*/ /*solut*/
-    int64_t sleep_endtick; /* The tick after which the thread should awake (if the thread is in sleep) *//*solut */
+    struct list_elem waitelem;          /* List element, stored in the wait_list queue */
+    int64_t sleep_endtick;              /* The tick after which the thread should awake (if the thread is in sleep) */
+
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element, stored in the ready_list queue .*/ /*solut*/
-    /*solut */
+    struct list_elem elem;              /* List element, stored in the ready_list queue */
+
     // needed for priority donations
     struct lock *waiting_lock;          /* The lock object on which this thread is waiting (or NULL if not locked) */
     struct list locks;                  /* List of locks the thread holds (for multiple donations) */
-    /*solut */
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+    // Project 2: file descriptors and process table
+    /* Owned by userprog/process.c and userprog/syscall.c */
+
+    struct process_control_block *pcb;  /* Process Control Block */
+    struct list child_list;             /* List of children processes of this thread,
+                                          each elem is defined by pcb#elem */
+
+    struct list file_descriptors;       /* List of file_descriptors the thread contains */
 #endif
 
     /* Owned by thread.c. */
@@ -110,7 +126,7 @@ extern bool thread_mlfqs;
 void thread_init (void);
 void thread_start (void);
 
-void thread_tick (int64_t tick); /*solut */
+void thread_tick (int64_t tick);
 void thread_print_stats (void);
 
 typedef void thread_func (void *aux);
@@ -119,7 +135,7 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
-void thread_sleep_until (int64_t wake_tick); /*solut */
+void thread_sleep_until (int64_t wake_tick);
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);

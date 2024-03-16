@@ -1,6 +1,23 @@
 {
     "files.associations": {
         "intr-stubs.h": "c",
-        "synch.h": "c"
-    }
+        "synch.h": "c",
+        "thread.h": "c",
+        "interrupt.h": "c",
+        "shutdown.h": "c",
+        "vaddr.h": "c",
+        "gdt.h": "c",
+        "list.h": "c",
+        "palloc.h": "c",
+        "filesys.h": "c",
+        "init.h": "c",
+        "stdlib.h": "c",
+        "syscall-nr.h": "c",
+        "process.h": "c",
+        "pagedir.h": "c",
+        "random.h": "c",
+        "stdio.h": "c"
+    },
+    "C_Cpp.dimInactiveRegions": false,
+    "C_Cpp.errorSquiggles": "enabled"
 }
