@@ -76,8 +76,6 @@ static tid_t allocate_tid (void);
 
 void thread_awake (int64_t current_tick);
 
-void thread_priority_donate(struct thread *, int priority);
-
 /* Helper (Auxiliary) functions */
 static bool comparator_greater_thread_priority
   (const struct list_elem *, const struct list_elem *, void *aux);
@@ -368,6 +366,15 @@ thread_exit (void)
   process_exit ();
 #endif
 
+  struct thread *curr = thread_current();
+
+  // release all locks
+  struct list_elem *e;
+  for (e = list_begin (&curr->locks); e != list_end (&curr->locks); e = list_next (e)) {
+    struct lock *lock = list_entry(e, struct lock, lockelem);
+    lock_release(lock);
+  }
+
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
@@ -589,9 +596,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->original_priority = priority;
   t->waiting_lock = NULL;
   list_init (&t->locks);
-#ifdef USERPROG
-  list_init(&t->file_descriptors);
-#endif
   t->sleep_endtick = 0;
   t->magic = THREAD_MAGIC;
 
@@ -601,8 +605,10 @@ init_thread (struct thread *t, const char *name, int priority)
 
 #ifdef USERPROG
   // init process-related informations.
-  list_init(&t->child_list);
   t->pcb = NULL;
+  list_init(&t->child_list);
+  list_init(&t->file_descriptors);
+  t->executing_file = NULL;
 #endif
 }
 
@@ -723,7 +729,7 @@ allocate_tid (void)
 static bool
 comparator_greater_thread_priority (
     const struct list_elem *a,
-    const struct list_elem *b, void *aux)
+    const struct list_elem *b, void *aux UNUSED)
 {
   struct thread *ta, *tb;
   ASSERT (a != NULL);

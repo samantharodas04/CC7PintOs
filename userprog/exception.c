@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "userprog/gdt.h"
+#include "userprog/syscall.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
@@ -148,8 +149,8 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* (3.1.5) a page fault in the kernel merely sets eax to 0xffffffff
-   * and copies its former value into eip */
+  /* (3.1.5) Un error de página en el kernel simplemente establece EAX en 0xffffffff
+   * y copia su valor anterior en EIP */
   if(!user) { // kernel mode
     f->eip = (void *) f->eax;
     f->eax = 0xffffffff;

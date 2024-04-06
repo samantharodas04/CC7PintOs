@@ -16,7 +16,11 @@
         "process.h": "c",
         "pagedir.h": "c",
         "random.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "round.h": "c",
+        "file.h": "c",
+        "debug.h": "c",
+        "flags.h": "c"
     },
     "C_Cpp.dimInactiveRegions": false,
     "C_Cpp.errorSquiggles": "enabled"

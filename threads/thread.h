@@ -112,6 +112,8 @@ struct thread
                                           each elem is defined by pcb#elem */
 
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
+
+    struct file *executing_file;        /* The executable file of associated process. */
 #endif
 
     /* Owned by thread.c. */
@@ -150,6 +152,7 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_priority_donate(struct thread *, int priority);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
