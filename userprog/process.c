@@ -16,9 +16,17 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
+#ifndef VM
+// alternative of vm-related functions introduced in Project 3
+#define vm_frame_allocate(x, y) palloc_get_page(x)
+#define vm_frame_free(x) palloc_free_page(x)
+#endif
 
 #ifdef DEBUG
 #define _DEBUG_PRINTF(...) printf(__VA_ARGS__)
@@ -58,19 +66,20 @@ process_execute (const char *cmdline)
   strlcpy (file_name, cmdline, PGSIZE);
   file_name = strtok_r(file_name, " ", &save_ptr);
 
-  /* Crear un nuevo thread para ejecutar FILE_NAME. */
+  /* Create a new thread to execute FILE_NAME. */
 
-  //Crear un PCB, junto con file_name, y pasarlo a thread_create
-  // para que un hilo recién creado pueda contener el PCB del proceso a ejecutar.
+  // Create a PCB, along with file_name, and pass it into thread_create
+  // so that a newly created thread can hold the PCB of process to be executed.
   pcb = palloc_get_page(0);
   if (pcb == NULL) {
     goto execute_failed;
   }
 
-  // pid aún no se ha establecido. Más tarde, en start_process(), se determinará.
-  // por lo que tenemos que posponer las acciones posteriores (como poner 'pcb'
-  // junto con (determinado) 'pid' en 'child_list'), usando cambio de contexto.
+  // pid is not set yet. Later, in start_process(), it will be determined.
+  // so we have to postpone afterward actions (such as putting 'pcb'
+  // alongwith (determined) 'pid' into 'child_list'), using context switching.
   pcb->pid = PID_INITIALIZING;
+  pcb->parent_thread = thread_current();
 
   pcb->cmdline = cmdline_copy;
   pcb->waiting = false;
@@ -81,20 +90,20 @@ process_execute (const char *cmdline)
   sema_init(&pcb->sema_initialization, 0);
   sema_init(&pcb->sema_wait, 0);
 
-  // crear thread!
+  // create thread!
   tid = thread_create (file_name, PRI_DEFAULT, start_process, pcb);
 
   if (tid == TID_ERROR) {
     goto execute_failed;
   }
 
-  // espera hasta que se complete la inicialización dentro de start_process().
+  // wait until initialization inside start_process() is complete.
   sema_down(&pcb->sema_initialization);
   if(cmdline_copy) {
     palloc_free_page (cmdline_copy);
   }
 
-  // proceso creado con éxito, actualizar lista de procesos hijo
+  // process successfully created, maintain child process list
   if(pcb->pid >= 0) {
     list_push_back (&(thread_current()->child_list), &(pcb->elem));
   }
@@ -103,7 +112,7 @@ process_execute (const char *cmdline)
   return pcb->pid;
 
 execute_failed:
-  // liberar la memoria asignada y devolver
+  // release allocated memory and return
   if(cmdline_copy) palloc_free_page (cmdline_copy);
   if(file_name) palloc_free_page (file_name);
   if(pcb) palloc_free_page (pcb);
@@ -111,8 +120,8 @@ execute_failed:
   return PID_ERROR;
 }
 
-/* Una función de subproceso que carga un proceso de usuario y lo inicia de forma ascendente.
- actual. */
+/* A thread function that loads a user process and starts it
+   running. */
 static void
 start_process (void *pcb_)
 {
@@ -151,48 +160,56 @@ start_process (void *pcb_)
   }
   palloc_free_page (cmdline_tokens);
 
+  /* Set up CWD */
+  if (pcb->parent_thread != NULL && pcb->parent_thread->cwd != NULL) {
+    // child process inherits the CWD
+    t->cwd = dir_reopen(pcb->parent_thread->cwd);
+  }
+  else {
+    t->cwd = dir_open_root();
+  }
 
 finish_step:
 
-  /* Asignar PCB */
-  // mantenemos un mapeo uno a uno entre pid y tid, con función de identidad.
-  // pid está determinado, así que interactúa con process_execute() para mantener child_list.
+  /* Assign PCB */
+  // we maintain an one-to-one mapping between pid and tid, with identity function.
+  // pid is determined, so interact with process_execute() for maintaining child_list
   pcb->pid = success ? (pid_t)(t->tid) : PID_ERROR;
   t->pcb = pcb;
 
-  // despertar sleeping en process_execute()
+  // wake up sleeping in process_execute()
   sema_up(&pcb->sema_initialization);
 
-  /* Si falla la carga, salir. */
+  /* If load failed, quit. */
   if (!success)
     sys_exit (-1);
 
-  /* Iniciar el proceso de usuario simulando un retorno de una
-     interrupción, implementada por intr_exit (en
-     threads/intr-stubs.S).  Dado que intr_exit toma todos sus
-     argumentos en el stack en forma de `struct intr_frame',
-     simplemente apuntamos el puntero de pila (%esp) a nuestro stack frame
-     y saltamos a él. */
+  /* Start the user process by simulating a return from an
+     interrupt, implemented by intr_exit (in
+     threads/intr-stubs.S).  Because intr_exit takes all of its
+     arguments on the stack in the form of a `struct intr_frame',
+     we just point the stack pointer (%esp) to our stack frame
+     and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
 
-/* Espera a que el thread TID muera y devuelve su estado de salida.  Si
-   fue terminado por el kernel (es decir, muerto debido a una
-   excepción), devuelve -1.  Si TID es inválido o si no era un
-   hijo del proceso llamante, o si process_wait() ya ha sido
-   sido llamada con éxito para el TID dado, devuelve -1
-   inmediatamente, sin esperar.
+/* Waits for thread TID to die and returns its exit status.  If
+   it was terminated by the kernel (i.e. killed due to an
+   exception), returns -1.  If TID is invalid or if it was not a
+   child of the calling process, or if process_wait() has already
+   been successfully called for the given TID, returns -1
+   immediately, without waiting.
 
-   Esta función será implementada en el problema 2-2.  Por ahora
-   no hace nada. */
+   This function will be implemented in problem 2-2.  For now, it
+   does nothing. */
 int
 process_wait (tid_t child_tid)
 {
   struct thread *t = thread_current ();
   struct list *child_list = &(t->child_list);
 
-  // buscar el proceso con tid igual a 'child_tid' de 'child_list'
+  // lookup the process with tid equals 'child_tid' from 'child_list'
   struct process_control_block *child_pcb = NULL;
   struct list_elem *it = NULL;
 
@@ -201,21 +218,21 @@ process_wait (tid_t child_tid)
       struct process_control_block *pcb = list_entry(
           it, struct process_control_block, elem);
 
-      if(pcb->pid == child_tid) { // OK, el direct child encontrado-
+      if(pcb->pid == child_tid) { // OK, the direct child found
         child_pcb = pcb;
         break;
       }
     }
   }
 
-  // Si child process no es encontrado, retornar -1 inmediatamente
+  // if child process is not found, return -1 immediately
   if (child_pcb == NULL) {
     _DEBUG_PRINTF("[DEBUG] wait(): child not found, pid = %d\n", child_tid);
     return -1;
   }
 
   if (child_pcb->waiting) {
-    //ya en espera (el padre ya ha llamado a wait en el pid del hijo)
+    // already waiting (the parent already called wait on child's pid)
     _DEBUG_PRINTF("[DEBUG] wait(): child found, pid = %d, but it is already waiting\n", child_tid);
     return -1; // a process may wait for any fixed child at most once
   }
@@ -223,35 +240,35 @@ process_wait (tid_t child_tid)
     child_pcb->waiting = true;
   }
 
-  // wait(block) hasta que el child termine
-  // ver process_exit() para señalar este semáforo
+  // wait(block) until child terminates
+  // see process_exit() for signaling this semaphore
   if (! child_pcb->exited) {
     sema_down(& (child_pcb->sema_wait));
   }
   ASSERT (child_pcb->exited == true);
 
-  // eliminar de child_list
+  // remove from child_list
   ASSERT (it != NULL);
   list_remove (it);
 
-  // devuelve el código de salida del child process
+  // return the exit code of the child process
   int retcode = child_pcb->exitcode;
 
-  // Ahora el objeto pcb del child process  puede ser finalmente liberado.
-  // (en este contexto, se garantiza que el child process ha salido).
+  // Now the pcb object of the child process can be finally freed.
+  // (in this context, the child process is guaranteed to have been exited)
   palloc_free_page(child_pcb);
 
   return retcode;
 }
 
-/* Libera los recursos del proceso actual. */
+/* Free the current process's resources. */
 void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  /* Los recursos deben limpiarse */
+  /* Resources should be cleaned up */
   // 1. file descriptors
   struct list *fdlist = &cur->file_descriptors;
   while (!list_empty(fdlist)) {
@@ -260,70 +277,102 @@ process_exit (void)
     file_close(desc->file);
     palloc_free_page(desc); // see sys_open()
   }
+#ifdef VM
+  // mmap descriptors
+  struct list *mmlist = &cur->mmap_list;
+  while (!list_empty(mmlist)) {
+    struct list_elem *e = list_begin (mmlist);
+    struct mmap_desc *desc = list_entry(e, struct mmap_desc, elem);
 
-  // 2. limpiar pcb objeto de todos los children processes
+    // in sys_munmap(), the element is removed from the list
+    ASSERT( sys_munmap (desc->id) == true );
+  }
+#endif
+
+  /* Close CWD */
+  if(cur->cwd) dir_close (cur->cwd);
+
+  // 2. clean up pcb object of all children processes
   struct list *child_list = &cur->child_list;
   while (!list_empty(child_list)) {
     struct list_elem *e = list_pop_front (child_list);
     struct process_control_block *pcb;
     pcb = list_entry(e, struct process_control_block, elem);
     if (pcb->exited == true) {
-      // pcb puede liberarse cuando ya esté terminado
+      // pcb can freed when it is already terminated
       palloc_free_page (pcb);
     } else {
-      // el child process se queda huérfano.
-      // no libere la pcb todavía, posponga hasta que el child termine
+      // the child process becomes an orphan.
+      // do not free pcb yet, postpone until the child terminates
       pcb->orphan = true;
+      pcb->parent_thread = NULL;
     }
   }
 
-  /* Archivo de liberación del ejecutablee */
+  /* Release file for the executable */
   if(cur->executing_file) {
     file_allow_write(cur->executing_file);
     file_close(cur->executing_file);
   }
 
-  // Desbloquea el proceso padre en espera, si existe, de wait().
-  // ahora su recurso (pcb on page, etc.) puede ser liberado.
+  /* Unblock the waiting parent process, if any, from wait().
+     now its resource (pcb on page, etc.) can be freed. */
+  /* IMPORTANT : The order of setting pcb->exited as true does matter.
+     To guarantee that the process and pcb is not used any more when freeing it
+     (i.e. in wait() procedure -- see near L250),
+     we have to run this assignment as late as possible
+     (just before a switch context might happen). */
+  cur->pcb->exited = true;
+  bool cur_orphan = cur->pcb->orphan;
   sema_up (&cur->pcb->sema_wait);
 
-  // Destruye el objeto pcb por sí mismo, si es huérfano.
-// ver (parte 2) de arriba.
-  if (cur->pcb->orphan == true) {
+  // In this context, cur->pcb is supposed to be freed (so don't access it)
+  // Destroy the pcb object by itself, if it is orphan (which is stored before)
+  // see (part 2) of above.
+  if (cur_orphan) {
     palloc_free_page (& cur->pcb);
   }
 
-  /* Destruye el directorio de páginas del proceso actual y vuelve
-     al directorio de páginas exclusivo del núcleo. */
+#ifdef VM
+  // Destroy the SUPT, its all SPTEs, all the frames, and swaps.
+  // Important: All the frames held by this thread should ALSO be freed
+  // (see the destructor of SPTE). Otherwise an access to frame with
+  // its owner thread had been died will result in fault.
+  vm_supt_destroy (cur->supt);
+  cur->supt = NULL;
+#endif
+
+  /* Destroy the current process's page directory and switch back
+     to the kernel-only page directory. */
   pd = cur->pagedir;
   if (pd != NULL)
     {
-      /* La ordenación correcta es crucial.  Debemos poner
-         cur->pagedir a NULL antes de cambiar de directorio de páginas,
-         para que una interrupción del temporizador no pueda volver al directorio de páginas del proceso.
-         directorio de páginas del proceso.  Debemos activar el directorio de páginas base
-         base antes de destruir el directorio page
-         del proceso, o nuestro directorio de páginas activo será uno
-         que ha sido liberado (y borrado).  */
+      /* Correct ordering here is crucial.  We must set
+         cur->pagedir to NULL before switching page directories,
+         so that a timer interrupt can't switch back to the
+         process page directory.  We must activate the base page
+         directory before destroying the process's page
+         directory, or our active page directory will be one
+         that's been freed (and cleared). */
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
 }
 
-/* Configura la CPU para ejecutar código de usuario en el hilo
-   actual.
-   Esta función es llamada en cada cambio de contexto.  */
+/* Sets up the CPU for running user code in the current
+   thread.
+   This function is called on every context switch. */
 void
 process_activate (void)
 {
   struct thread *t = thread_current ();
 
-  /* Activar las tablas de páginas del thread. */
+  /* Activate thread's page tables. */
   pagedir_activate (t->pagedir);
 
-  /* Establece la pila del núcleo del hilo para su uso en el procesamiento de
-     las interrupciones. */
+  /* Set thread's kernel stack for use in processing
+     interrupts. */
   tss_update ();
 }
 
@@ -410,8 +459,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
-  /* Allocate and activate page directory. */
+  /* Allocate and activate page directory, as well as SPTE. */
   t->pagedir = pagedir_create ();
+#ifdef VM
+  t->supt = vm_supt_create ();
+#endif
+
   if (t->pagedir == NULL)
     goto done;
   process_activate ();
@@ -596,15 +649,25 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+#ifdef VM
+      // Lazy load
+      struct thread *curr = thread_current ();
+      ASSERT (pagedir_get_page(curr->pagedir, upage) == NULL); // no virtual page yet?
+
+      if (! vm_supt_install_filesys(curr->supt, upage,
+            file, ofs, page_read_bytes, page_zero_bytes, writable) ) {
+        return false;
+      }
+#else
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      uint8_t *kpage = vm_frame_allocate (PAL_USER, upage);
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          vm_frame_free (kpage);
           return false;
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -612,22 +675,26 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable))
         {
-          palloc_free_page (kpage);
+          vm_frame_free (kpage);
           return false;
         }
+#endif
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+#ifdef VM
+      ofs += PGSIZE;
+#endif
     }
   return true;
 }
 
 
 /*
- * Introduce los argumentos en la región de stack del programa de usuario
- * (especificado por esp), según la convención de llamada.
+ * Push arguments into the stack region of user program
+ * (specified by esp), according to the calling convention.
  */
 static void
 push_arguments (const char* cmdline_tokens[], int argc, void **esp)
@@ -679,14 +746,15 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  // upage address is the first segment of stack.
+  kpage = vm_frame_allocate (PAL_USER | PAL_ZERO, PHYS_BASE - PGSIZE);
   if (kpage != NULL)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
         *esp = PHYS_BASE;
       else
-        palloc_free_page (kpage);
+        vm_frame_free (kpage);
     }
   return success;
 }
@@ -707,6 +775,11 @@ install_page (void *upage, void *kpage, bool writable)
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
-  return (pagedir_get_page (t->pagedir, upage) == NULL
-          && pagedir_set_page (t->pagedir, upage, kpage, writable));
+  bool success = (pagedir_get_page (t->pagedir, upage) == NULL);
+  success = success && pagedir_set_page (t->pagedir, upage, kpage, writable);
+#ifdef VM
+  success = success && vm_supt_install_frame (t->supt, upage, kpage);
+  if(success) vm_frame_unpin(kpage);
+#endif
+  return success;
 }
